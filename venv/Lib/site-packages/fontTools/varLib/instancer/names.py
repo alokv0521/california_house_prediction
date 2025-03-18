@@ -114,8 +114,8 @@ def updateNameTable(varfont, axisLimits):
     # The updated name table will reflect the new 'zero origin' of the font.
     # If we're instantiating a partial font, we will populate the unpinned
     # axes with their default axis values from fvar.
-    axisLimits = AxisLimits(axisLimits).populateDefaults(varfont)
-    partialDefaults = {k: v.default for k, v in axisLimits.items()}
+    axisLimits = AxisLimits(axisLimits).limitAxesAndPopulateDefaults(varfont)
+    partialDefaults = axisLimits.defaultLocation()
     fvarDefaults = {a.axisTag: a.defaultValue for a in fvar.axes}
     defaultAxisCoords = AxisLimits({**fvarDefaults, **partialDefaults})
     assert all(v.minimum == v.maximum for v in defaultAxisCoords.values())
@@ -134,6 +134,14 @@ def updateNameTable(varfont, axisLimits):
 def checkAxisValuesExist(stat, axisValues, axisCoords):
     seen = set()
     designAxes = stat.DesignAxisRecord.Axis
+    hasValues = set()
+    for value in stat.AxisValueArray.AxisValue:
+        if value.Format in (1, 2, 3):
+            hasValues.add(designAxes[value.AxisIndex].AxisTag)
+        elif value.Format == 4:
+            for rec in value.AxisValueRecord:
+                hasValues.add(designAxes[rec.AxisIndex].AxisTag)
+
     for axisValueTable in axisValues:
         axisValueFormat = axisValueTable.Format
         if axisValueTable.Format in (1, 2, 3):
@@ -150,7 +158,7 @@ def checkAxisValuesExist(stat, axisValues, axisCoords):
                 if axisTag in axisCoords and rec.Value == axisCoords[axisTag]:
                     seen.add(axisTag)
 
-    missingAxes = set(axisCoords) - seen
+    missingAxes = (set(axisCoords) - seen) & hasValues
     if missingAxes:
         missing = ", ".join(f"'{i}': {axisCoords[i]}" for i in missingAxes)
         raise ValueError(f"Cannot find Axis Values {{{missing}}}")

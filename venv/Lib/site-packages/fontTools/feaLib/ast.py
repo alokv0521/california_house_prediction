@@ -595,8 +595,8 @@ class MarkClassDefinition(Statement):
 class AlternateSubstStatement(Statement):
     """A ``sub ... from ...`` statement.
 
-    ``prefix``, ``glyph``, ``suffix`` and ``replacement`` should be lists of
-    `glyph-containing objects`_. ``glyph`` should be a `one element list`."""
+    ``glyph`` and ``replacement`` should be `glyph-containing objects`_.
+    ``prefix`` and ``suffix`` should be lists of `glyph-containing objects`_."""
 
     def __init__(self, prefix, glyph, suffix, replacement, location=None):
         Statement.__init__(self, location)
@@ -912,14 +912,11 @@ class IgnoreSubstStatement(Statement):
         contexts = []
         for prefix, glyphs, suffix in self.chainContexts:
             res = ""
-            if len(prefix) or len(suffix):
-                if len(prefix):
-                    res += " ".join(map(asFea, prefix)) + " "
-                res += " ".join(g.asFea() + "'" for g in glyphs)
-                if len(suffix):
-                    res += " " + " ".join(map(asFea, suffix))
-            else:
-                res += " ".join(map(asFea, glyphs))
+            if len(prefix):
+                res += " ".join(map(asFea, prefix)) + " "
+            res += " ".join(g.asFea() + "'" for g in glyphs)
+            if len(suffix):
+                res += " " + " ".join(map(asFea, suffix))
             contexts.append(res)
         return "ignore sub " + ", ".join(contexts) + ";"
 
@@ -1259,25 +1256,34 @@ class MultipleSubstStatement(Statement):
         """Calls the builder object's ``add_multiple_subst`` callback."""
         prefix = [p.glyphSet() for p in self.prefix]
         suffix = [s.glyphSet() for s in self.suffix]
-        if not self.replacement and hasattr(self.glyph, "glyphSet"):
-            for glyph in self.glyph.glyphSet():
+        if hasattr(self.glyph, "glyphSet"):
+            originals = self.glyph.glyphSet()
+        else:
+            originals = [self.glyph]
+        count = len(originals)
+        replaces = []
+        for r in self.replacement:
+            if hasattr(r, "glyphSet"):
+                replace = r.glyphSet()
+            else:
+                replace = [r]
+            if len(replace) == 1 and len(replace) != count:
+                replace = replace * count
+            replaces.append(replace)
+        replaces = list(zip(*replaces))
+
+        seen_originals = set()
+        for i, original in enumerate(originals):
+            if original not in seen_originals:
+                seen_originals.add(original)
                 builder.add_multiple_subst(
                     self.location,
                     prefix,
-                    glyph,
+                    original,
                     suffix,
-                    self.replacement,
+                    replaces and replaces[i] or (),
                     self.forceChain,
                 )
-        else:
-            builder.add_multiple_subst(
-                self.location,
-                prefix,
-                self.glyph,
-                suffix,
-                self.replacement,
-                self.forceChain,
-            )
 
     def asFea(self, indent=""):
         res = "sub "
@@ -2068,7 +2074,7 @@ class ConditionsetStatement(Statement):
         self.conditions = conditions
 
     def build(self, builder):
-        builder.add_conditionset(self.name, self.conditions)
+        builder.add_conditionset(self.location, self.name, self.conditions)
 
     def asFea(self, res="", indent=""):
         res += indent + f"conditionset {self.name} " + "{\n"

@@ -1,7 +1,6 @@
 """EpochConverter module containing class EpochConverter."""
 
-from matplotlib import cbook
-import matplotlib.units as units
+from matplotlib import cbook, units
 import matplotlib.dates as date_ticker
 
 __all__ = ['EpochConverter']
@@ -13,9 +12,7 @@ class EpochConverter(units.ConversionInterface):
     classes.
     """
 
-    # julian date reference for "Jan 1, 0001" minus 1 day because
-    # Matplotlib really wants "Jan 0, 0001"
-    jdRef = 1721425.5 - 1
+    jdRef = 1721425.5
 
     @staticmethod
     def axisinfo(unit, axis):

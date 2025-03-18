@@ -77,7 +77,7 @@ def iter_referenced_ids(tree: etree.Element) -> Iterator[str]:
 
         attrs = el.attrib
         if "style" in attrs:
-            attrs = {**attrs, **parse_css_declarations(el.attrib["style"])}
+            attrs = {**dict(attrs), **parse_css_declarations(el.attrib["style"])}
         for attr in ("fill", "clip-path"):
             if attr in attrs:
                 value = attrs[attr]
@@ -204,7 +204,6 @@ def subset_glyphs(self, s) -> bool:
 
     new_docs: List[SVGDocument] = []
     for doc in self.docList:
-
         glyphs = {
             glyph_order[i] for i in range(doc.startGlyphID, doc.endGlyphID + 1)
         }.intersection(s.glyphs)
@@ -225,6 +224,9 @@ def subset_glyphs(self, s) -> bool:
                 # ignore blank text as it's not meaningful in OT-SVG; it also prevents
                 # dangling tail text after removing an element when pretty_print=True
                 remove_blank_text=True,
+                # don't replace entities; we don't expect any in OT-SVG and they may
+                # be abused for XXE attacks
+                resolve_entities=False,
             ),
         )
 

@@ -34,8 +34,8 @@ def _make_relax_case():
             key = b'PYTHONCASEOK'
 
         def _relax_case():
-            """True if filenames must be checked case-insensitively."""
-            return key in _os.environ
+            """True if filenames must be checked case-insensitively and ignore environment flags are not set."""
+            return not sys.flags.ignore_environment and key in _os.environ
     else:
         def _relax_case():
             """True if filenames must be checked case-insensitively."""
@@ -43,14 +43,20 @@ def _make_relax_case():
     return _relax_case
 
 
-def _w_long(x):
+def _pack_uint32(x):
     """Convert a 32-bit integer to little-endian."""
     return (int(x) & 0xFFFFFFFF).to_bytes(4, 'little')
 
 
-def _r_long(int_bytes):
+def _unpack_uint32(data):
     """Convert 4 bytes in little-endian to an integer."""
-    return int.from_bytes(int_bytes, 'little')
+    assert len(data) == 4
+    return int.from_bytes(data, 'little')
+
+def _unpack_uint16(data):
+    """Convert 2 bytes in little-endian to an integer."""
+    assert len(data) == 2
+    return int.from_bytes(data, 'little')
 
 
 def _path_join(*path_parts):
@@ -100,6 +106,15 @@ def _path_isdir(path):
     if not path:
         path = _os.getcwd()
     return _path_is_mode_type(path, 0o040000)
+
+
+def _path_isabs(path):
+    """Replacement for os.path.isabs.
+
+    Considers a Windows drive-relative path (no drive, but starts with slash) to
+    still be "absolute".
+    """
+    return path.startswith(path_separators) or path[1:3] in _pathseps_with_colon
 
 
 def _write_atomic(path, data, mode=0o666):
@@ -246,8 +261,23 @@ _code_type = type(_write_atomic.__code__)
 #     Python 3.7a2  3391 (update GET_AITER #31709)
 #     Python 3.7a4  3392 (PEP 552: Deterministic pycs #31650)
 #     Python 3.7b1  3393 (remove STORE_ANNOTATION opcode #32550)
-#     Python 3.7b5  3394 (restored docstring as the firts stmt in the body;
+#     Python 3.7b5  3394 (restored docstring as the first stmt in the body;
 #                         this might affected the first line number #32911)
+#     Python 3.8a1  3400 (move frame block handling to compiler #17611)
+#     Python 3.8a1  3401 (add END_ASYNC_FOR #33041)
+#     Python 3.8a1  3410 (PEP570 Python Positional-Only Parameters #36540)
+#     Python 3.8b2  3411 (Reverse evaluation order of key: value in dict
+#                         comprehensions #35224)
+#     Python 3.8b2  3412 (Swap the position of positional args and positional
+#                         only args in ast.arguments #37593)
+#     Python 3.8b4  3413 (Fix "break" and "continue" in "finally" #37830)
+#     Python 3.9a0  3420 (add LOAD_ASSERTION_ERROR #34880)
+#     Python 3.9a0  3421 (simplified bytecode for with blocks #32949)
+#     Python 3.9a0  3422 (remove BEGIN_FINALLY, END_FINALLY, CALL_FINALLY, POP_FINALLY bytecodes #33387)
+#     Python 3.9a2  3423 (add IS_OP, CONTAINS_OP and JUMP_IF_NOT_EXC_MATCH bytecodes #39156)
+#     Python 3.9a2  3424 (simplify bytecodes for *value unpacking)
+#     Python 3.9a2  3425 (simplify bytecodes for **value unpacking)
+
 #
 # MAGIC must change whenever the bytecode emitted by the compiler may no
 # longer be understood by older implementations of the eval loop (usually
@@ -256,7 +286,7 @@ _code_type = type(_write_atomic.__code__)
 # Whenever MAGIC_NUMBER is changed, the ranges in the magic_values array
 # in PC/launcher.c must also be updated.
 
-MAGIC_NUMBER = (3394).to_bytes(2, 'little') + b'\r\n'
+MAGIC_NUMBER = (3425).to_bytes(2, 'little') + b'\r\n'
 _RAW_MAGIC_NUMBER = int.from_bytes(MAGIC_NUMBER, 'little')  # For import.c
 
 _PYCACHE = '__pycache__'
@@ -310,7 +340,33 @@ def cache_from_source(path, debug_override=None, *, optimization=None):
         if not optimization.isalnum():
             raise ValueError('{!r} is not alphanumeric'.format(optimization))
         almost_filename = '{}.{}{}'.format(almost_filename, _OPT, optimization)
-    return _path_join(head, _PYCACHE, almost_filename + BYTECODE_SUFFIXES[0])
+    filename = almost_filename + BYTECODE_SUFFIXES[0]
+    if sys.pycache_prefix is not None:
+        # We need an absolute path to the py file to avoid the possibility of
+        # collisions within sys.pycache_prefix, if someone has two different
+        # `foo/bar.py` on their system and they import both of them using the
+        # same sys.pycache_prefix. Let's say sys.pycache_prefix is
+        # `C:\Bytecode`; the idea here is that if we get `Foo\Bar`, we first
+        # make it absolute (`C:\Somewhere\Foo\Bar`), then make it root-relative
+        # (`Somewhere\Foo\Bar`), so we end up placing the bytecode file in an
+        # unambiguous `C:\Bytecode\Somewhere\Foo\Bar\`.
+        if not _path_isabs(head):
+            head = _path_join(_os.getcwd(), head)
+
+        # Strip initial drive from a Windows path. We know we have an absolute
+        # path here, so the second part of the check rules out a POSIX path that
+        # happens to contain a colon at the second character.
+        if head[1] == ':' and head[0] not in path_separators:
+            head = head[2:]
+
+        # Strip initial path separator from `head` to complete the conversion
+        # back to a root-relative path before joining.
+        return _path_join(
+            sys.pycache_prefix,
+            head.lstrip(path_separators),
+            filename,
+        )
+    return _path_join(head, _PYCACHE, filename)
 
 
 def source_from_cache(path):
@@ -326,23 +382,29 @@ def source_from_cache(path):
         raise NotImplementedError('sys.implementation.cache_tag is None')
     path = _os.fspath(path)
     head, pycache_filename = _path_split(path)
-    head, pycache = _path_split(head)
-    if pycache != _PYCACHE:
-        raise ValueError('{} not bottom-level directory in '
-                         '{!r}'.format(_PYCACHE, path))
+    found_in_pycache_prefix = False
+    if sys.pycache_prefix is not None:
+        stripped_path = sys.pycache_prefix.rstrip(path_separators)
+        if head.startswith(stripped_path + path_sep):
+            head = head[len(stripped_path):]
+            found_in_pycache_prefix = True
+    if not found_in_pycache_prefix:
+        head, pycache = _path_split(head)
+        if pycache != _PYCACHE:
+            raise ValueError(f'{_PYCACHE} not bottom-level directory in '
+                             f'{path!r}')
     dot_count = pycache_filename.count('.')
     if dot_count not in {2, 3}:
-        raise ValueError('expected only 2 or 3 dots in '
-                         '{!r}'.format(pycache_filename))
+        raise ValueError(f'expected only 2 or 3 dots in {pycache_filename!r}')
     elif dot_count == 3:
         optimization = pycache_filename.rsplit('.', 2)[-2]
         if not optimization.startswith(_OPT):
             raise ValueError("optimization portion of filename does not start "
-                             "with {!r}".format(_OPT))
+                             f"with {_OPT!r}")
         opt_level = optimization[len(_OPT):]
         if not opt_level.isalnum():
-            raise ValueError("optimization level {!r} is not an alphanumeric "
-                             "value".format(optimization))
+            raise ValueError(f"optimization level {optimization!r} is not an "
+                             "alphanumeric value")
     base_filename = pycache_filename.partition('.')[0]
     return _path_join(head, base_filename + SOURCE_SUFFIXES[0])
 
@@ -460,7 +522,7 @@ def _classify_pyc(data, name, exc_details):
         message = f'reached EOF while reading pyc header of {name!r}'
         _bootstrap._verbose_message('{}', message)
         raise EOFError(message)
-    flags = _r_long(data[4:8])
+    flags = _unpack_uint32(data[4:8])
     # Only the first two flags are defined.
     if flags & ~0b11:
         message = f'invalid flags {flags!r} in {name!r}'
@@ -487,12 +549,12 @@ def _validate_timestamp_pyc(data, source_mtime, source_size, name,
     An ImportError is raised if the bytecode is stale.
 
     """
-    if _r_long(data[8:12]) != (source_mtime & 0xFFFFFFFF):
+    if _unpack_uint32(data[8:12]) != (source_mtime & 0xFFFFFFFF):
         message = f'bytecode is stale for {name!r}'
         _bootstrap._verbose_message('{}', message)
         raise ImportError(message, **exc_details)
     if (source_size is not None and
-        _r_long(data[12:16]) != (source_size & 0xFFFFFFFF)):
+        _unpack_uint32(data[12:16]) != (source_size & 0xFFFFFFFF)):
         raise ImportError(f'bytecode is stale for {name!r}', **exc_details)
 
 
@@ -536,9 +598,9 @@ def _compile_bytecode(data, name=None, bytecode_path=None, source_path=None):
 def _code_to_timestamp_pyc(code, mtime=0, source_size=0):
     "Produce the data for a timestamp-based pyc."
     data = bytearray(MAGIC_NUMBER)
-    data.extend(_w_long(0))
-    data.extend(_w_long(mtime))
-    data.extend(_w_long(source_size))
+    data.extend(_pack_uint32(0))
+    data.extend(_pack_uint32(mtime))
+    data.extend(_pack_uint32(source_size))
     data.extend(marshal.dumps(code))
     return data
 
@@ -547,7 +609,7 @@ def _code_to_hash_pyc(code, source_hash, checked=True):
     "Produce the data for a hash-based pyc."
     data = bytearray(MAGIC_NUMBER)
     flags = 0b1 | checked << 1
-    data.extend(_w_long(flags))
+    data.extend(_pack_uint32(flags))
     assert len(source_hash) == 8
     data.extend(source_hash)
     data.extend(marshal.dumps(code))
@@ -654,9 +716,9 @@ class WindowsRegistryFinder:
     @classmethod
     def _open_registry(cls, key):
         try:
-            return _winreg.OpenKey(_winreg.HKEY_CURRENT_USER, key)
+            return winreg.OpenKey(winreg.HKEY_CURRENT_USER, key)
         except OSError:
-            return _winreg.OpenKey(_winreg.HKEY_LOCAL_MACHINE, key)
+            return winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, key)
 
     @classmethod
     def _search_registry(cls, fullname):
@@ -668,7 +730,7 @@ class WindowsRegistryFinder:
                                   sys_version='%d.%d' % sys.version_info[:2])
         try:
             with cls._open_registry(key) as hkey:
-                filepath = _winreg.QueryValue(hkey, '')
+                filepath = winreg.QueryValue(hkey, '')
         except OSError:
             return None
         return filepath
@@ -736,15 +798,16 @@ class SourceLoader(_LoaderBasics):
 
     def path_mtime(self, path):
         """Optional method that returns the modification time (an int) for the
-        specified path, where path is a str.
+        specified path (a str).
 
         Raises OSError when the path cannot be handled.
         """
         raise OSError
 
     def path_stats(self, path):
-        """Optional method returning a metadata dict for the specified path
-        to by the path (str).
+        """Optional method returning a metadata dict for the specified
+        path (a str).
+
         Possible keys:
         - 'mtime' (mandatory) is the numeric timestamp of last source
           code modification;
@@ -870,7 +933,6 @@ class SourceLoader(_LoaderBasics):
                                               len(source_bytes))
             try:
                 self._cache_bytecode(source_path, bytecode_path, data)
-                _bootstrap._verbose_message('wrote {!r}', bytecode_path)
             except NotImplementedError:
                 pass
         return code_object
@@ -913,8 +975,12 @@ class FileLoader:
 
     def get_data(self, path):
         """Return the data from path as raw bytes."""
-        with _io.FileIO(path, 'r') as file:
-            return file.read()
+        if isinstance(self, (SourceLoader, ExtensionFileLoader)):
+            with _io.open_code(str(path)) as file:
+                return file.read()
+        else:
+            with _io.FileIO(path, 'r') as file:
+                return file.read()
 
     # ResourceReader ABC API.
 
@@ -1114,6 +1180,9 @@ class _NamespacePath:
     def __iter__(self):
         return iter(self._recalculate())
 
+    def __getitem__(self, index):
+        return self._recalculate()[index]
+
     def __setitem__(self, index, path):
         self._path[index] = path
 
@@ -1305,6 +1374,19 @@ class PathFinder:
         if spec is None:
             return None
         return spec.loader
+
+    @classmethod
+    def find_distributions(cls, *args, **kwargs):
+        """
+        Find distributions.
+
+        Return an iterable of all Distribution instances capable of
+        loading the metadata for packages matching ``context.name``
+        (or all names if ``None`` indicated) along the paths in the list
+        of directories ``context.path``.
+        """
+        from importlib.metadata import MetadataPathFinder
+        return MetadataPathFinder.find_distributions(*args, **kwargs)
 
 
 class FileFinder:
@@ -1502,14 +1584,7 @@ def _setup(_bootstrap_module):
     sys = _bootstrap.sys
     _imp = _bootstrap._imp
 
-    # Directly load built-in modules needed during bootstrap.
     self_module = sys.modules[__name__]
-    for builtin_name in ('_io', '_warnings', 'builtins', 'marshal'):
-        if builtin_name not in sys.modules:
-            builtin_module = _bootstrap._builtin_from_name(builtin_name)
-        else:
-            builtin_module = sys.modules[builtin_name]
-        setattr(self_module, builtin_name, builtin_module)
 
     # Directly load the os module (needed during bootstrap).
     os_details = ('posix', ['/']), ('nt', ['\\', '/'])
@@ -1528,22 +1603,22 @@ def _setup(_bootstrap_module):
                 continue
     else:
         raise ImportError('importlib requires posix or nt')
+
     setattr(self_module, '_os', os_module)
     setattr(self_module, 'path_sep', path_sep)
     setattr(self_module, 'path_separators', ''.join(path_separators))
+    setattr(self_module, '_pathseps_with_colon', {f':{s}' for s in path_separators})
 
-    # Directly load the _thread module (needed during bootstrap).
-    thread_module = _bootstrap._builtin_from_name('_thread')
-    setattr(self_module, '_thread', thread_module)
-
-    # Directly load the _weakref module (needed during bootstrap).
-    weakref_module = _bootstrap._builtin_from_name('_weakref')
-    setattr(self_module, '_weakref', weakref_module)
-
-    # Directly load the winreg module (needed during bootstrap).
+    # Directly load built-in modules needed during bootstrap.
+    builtin_names = ['_io', '_warnings', 'marshal']
     if builtin_os == 'nt':
-        winreg_module = _bootstrap._builtin_from_name('winreg')
-        setattr(self_module, '_winreg', winreg_module)
+        builtin_names.append('winreg')
+    for builtin_name in builtin_names:
+        if builtin_name not in sys.modules:
+            builtin_module = _bootstrap._builtin_from_name(builtin_name)
+        else:
+            builtin_module = sys.modules[builtin_name]
+        setattr(self_module, builtin_name, builtin_module)
 
     # Constants
     setattr(self_module, '_relax_case', _make_relax_case())

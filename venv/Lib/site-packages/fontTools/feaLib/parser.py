@@ -45,7 +45,6 @@ class Parser(object):
     def __init__(
         self, featurefile, glyphNames=(), followIncludes=True, includeDir=None, **kwargs
     ):
-
         if "glyphMap" in kwargs:
             from fontTools.misc.loggingTools import deprecateArgument
 
@@ -134,7 +133,8 @@ class Parser(object):
             ]
             raise FeatureLibError(
                 "The following glyph names are referenced but are missing from the "
-                "glyph set:\n" + ("\n".join(error)), None
+                "glyph set:\n" + ("\n".join(error)),
+                None,
             )
         return self.doc_
 
@@ -396,7 +396,8 @@ class Parser(object):
                     self.expect_symbol_("-")
                     range_end = self.expect_cid_()
                     self.check_glyph_name_in_glyph_set(
-                        f"cid{range_start:05d}", f"cid{range_end:05d}",
+                        f"cid{range_start:05d}",
+                        f"cid{range_end:05d}",
                     )
                     glyphs.add_cid_range(
                         range_start,
@@ -522,27 +523,33 @@ class Parser(object):
                 )
             return (prefix, glyphs, lookups, values, suffix, hasMarks)
 
-    def parse_chain_context_(self):
+    def parse_ignore_glyph_pattern_(self, sub):
         location = self.cur_token_location_
         prefix, glyphs, lookups, values, suffix, hasMarks = self.parse_glyph_pattern_(
             vertical=False
         )
-        chainContext = [(prefix, glyphs, suffix)]
-        hasLookups = any(lookups)
+        if any(lookups):
+            raise FeatureLibError(
+                f'No lookups can be specified for "ignore {sub}"', location
+            )
+        if not hasMarks:
+            error = FeatureLibError(
+                f'Ambiguous "ignore {sub}", there should be least one marked glyph',
+                location,
+            )
+            log.warning(str(error))
+            suffix, glyphs = glyphs[1:], glyphs[0:1]
+        chainContext = (prefix, glyphs, suffix)
+        return chainContext
+
+    def parse_ignore_context_(self, sub):
+        location = self.cur_token_location_
+        chainContext = [self.parse_ignore_glyph_pattern_(sub)]
         while self.next_token_ == ",":
             self.expect_symbol_(",")
-            (
-                prefix,
-                glyphs,
-                lookups,
-                values,
-                suffix,
-                hasMarks,
-            ) = self.parse_glyph_pattern_(vertical=False)
-            chainContext.append((prefix, glyphs, suffix))
-            hasLookups = hasLookups or any(lookups)
+            chainContext.append(self.parse_ignore_glyph_pattern_(sub))
         self.expect_symbol_(";")
-        return chainContext, hasLookups
+        return chainContext
 
     def parse_ignore_(self):
         # Parses an ignore sub/pos rule.
@@ -550,18 +557,10 @@ class Parser(object):
         location = self.cur_token_location_
         self.advance_lexer_()
         if self.cur_token_ in ["substitute", "sub"]:
-            chainContext, hasLookups = self.parse_chain_context_()
-            if hasLookups:
-                raise FeatureLibError(
-                    'No lookups can be specified for "ignore sub"', location
-                )
+            chainContext = self.parse_ignore_context_("sub")
             return self.ast.IgnoreSubstStatement(chainContext, location=location)
         if self.cur_token_ in ["position", "pos"]:
-            chainContext, hasLookups = self.parse_chain_context_()
-            if hasLookups:
-                raise FeatureLibError(
-                    'No lookups can be specified for "ignore pos"', location
-                )
+            chainContext = self.parse_ignore_context_("pos")
             return self.ast.IgnorePosStatement(chainContext, location=location)
         raise FeatureLibError(
             'Expected "substitute" or "position"', self.cur_token_location_
@@ -603,9 +602,9 @@ class Parser(object):
         assert self.is_cur_keyword_("LigatureCaretByPos")
         location = self.cur_token_location_
         glyphs = self.parse_glyphclass_(accept_glyphname=True)
-        carets = [self.expect_number_()]
+        carets = [self.expect_number_(variable=True)]
         while self.next_token_ != ";":
-            carets.append(self.expect_number_())
+            carets.append(self.expect_number_(variable=True))
         self.expect_symbol_(";")
         return self.ast.LigatureCaretByPosStatement(glyphs, carets, location=location)
 
@@ -696,7 +695,9 @@ class Parser(object):
         location = self.cur_token_location_
         glyphs = self.parse_glyphclass_(accept_glyphname=True)
         if not glyphs.glyphSet():
-            raise FeatureLibError("Empty glyph class in mark class definition", location)
+            raise FeatureLibError(
+                "Empty glyph class in mark class definition", location
+            )
         anchor = self.parse_anchor_()
         name = self.expect_class_name_()
         self.expect_symbol_(";")
@@ -923,22 +924,27 @@ class Parser(object):
 
         # GSUB lookup type 2: Multiple substitution.
         # Format: "substitute f_f_i by f f i;"
-        if (
-            not reverse
-            and len(old) == 1
-            and len(old[0].glyphSet()) == 1
-            and len(new) > 1
-            and max([len(n.glyphSet()) for n in new]) == 1
-            and num_lookups == 0
-        ):
+        #
+        # GlyphsApp introduces two additional formats:
+        # Format 1: "substitute [f_i f_l] by [f f] [i l];"
+        # Format 2: "substitute [f_i f_l] by f [i l];"
+        # http://handbook.glyphsapp.com/en/layout/multiple-substitution-with-classes/
+        if not reverse and len(old) == 1 and len(new) > 1 and num_lookups == 0:
+            count = len(old[0].glyphSet())
             for n in new:
                 if not list(n.glyphSet()):
                     raise FeatureLibError("Empty class in replacement", location)
+                if len(n.glyphSet()) != 1 and len(n.glyphSet()) != count:
+                    raise FeatureLibError(
+                        f'Expected a glyph class with 1 or {count} elements after "by", '
+                        f"but found a glyph class with {len(n.glyphSet())} elements",
+                        location,
+                    )
             return self.ast.MultipleSubstStatement(
                 old_prefix,
-                tuple(old[0].glyphSet())[0],
+                old[0],
                 old_suffix,
-                tuple([list(n.glyphSet())[0] for n in new]),
+                new,
                 forceChain=hasMarks,
                 location=location,
             )
@@ -1747,7 +1753,8 @@ class Parser(object):
 
     def parse_featureNames_(self, tag):
         """Parses a ``featureNames`` statement found in stylistic set features.
-        See section `8.c <https://adobe-type-tools.github.io/afdko/OpenTypeFeatureFileSpecification.html#8.c>`_."""
+        See section `8.c <https://adobe-type-tools.github.io/afdko/OpenTypeFeatureFileSpecification.html#8.c>`_.
+        """
         assert self.cur_token_ == "featureNames", self.cur_token_
         block = self.ast.NestedBlock(
             tag, self.cur_token_, location=self.cur_token_location_
@@ -2064,13 +2071,7 @@ class Parser(object):
     def expect_glyph_(self):
         self.advance_lexer_()
         if self.cur_token_type_ is Lexer.NAME:
-            self.cur_token_ = self.cur_token_.lstrip("\\")
-            if len(self.cur_token_) > 63:
-                raise FeatureLibError(
-                    "Glyph names must not be longer than 63 characters",
-                    self.cur_token_location_,
-                )
-            return self.cur_token_
+            return self.cur_token_.lstrip("\\")
         elif self.cur_token_type_ is Lexer.CID:
             return "cid%05d" % self.cur_token_
         raise FeatureLibError("Expected a glyph name or CID", self.cur_token_location_)

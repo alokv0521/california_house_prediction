@@ -571,8 +571,8 @@ def test_func_dir(tmpdir):
     assert g._check_previous_func_code()
 
     # Test the robustness to failure of loading previous results.
-    func_id, args_id = g._get_output_identifiers(1)
-    output_dir = os.path.join(g.store_backend.location, func_id, args_id)
+    args_id = g._get_args_id(1)
+    output_dir = os.path.join(g.store_backend.location, g.func_id, args_id)
     a = g(1)
     assert os.path.exists(output_dir)
     os.remove(os.path.join(output_dir, 'output.pkl'))
@@ -587,10 +587,10 @@ def test_persistence(tmpdir):
 
     h = pickle.loads(pickle.dumps(g))
 
-    func_id, args_id = h._get_output_identifiers(1)
-    output_dir = os.path.join(h.store_backend.location, func_id, args_id)
+    args_id = h._get_args_id(1)
+    output_dir = os.path.join(h.store_backend.location, h.func_id, args_id)
     assert os.path.exists(output_dir)
-    assert output == h.store_backend.load_item([func_id, args_id])
+    assert output == h.store_backend.load_item([h.func_id, args_id])
     memory2 = pickle.loads(pickle.dumps(memory))
     assert memory.store_backend.location == memory2.store_backend.location
 
@@ -668,9 +668,9 @@ def test_call_and_shelve_lazily_load_stored_result(tmpdir):
 
     memory = Memory(location=tmpdir.strpath, verbose=0)
     func = memory.cache(f)
-    func_id, argument_hash = func._get_output_identifiers(2)
+    args_id = func._get_args_id(2)
     result_path = os.path.join(memory.store_backend.location,
-                               func_id, argument_hash, 'output.pkl')
+                               func.func_id, args_id, 'output.pkl')
     assert func(2) == 5
     first_access_time = os.stat(result_path).st_atime
     time.sleep(1)
@@ -875,7 +875,7 @@ def _setup_toy_cache(tmpdir, num_inputs=10):
         get_1000_bytes(arg)
 
     func_id = _build_func_identifier(get_1000_bytes)
-    hash_dirnames = [get_1000_bytes._get_output_identifiers(arg)[1]
+    hash_dirnames = [get_1000_bytes._get_args_id(arg)
                      for arg in inputs]
 
     full_hashdirs = [os.path.join(get_1000_bytes.store_backend.location,
@@ -911,6 +911,11 @@ def test__get_items(tmpdir):
 
 
 def test__get_items_to_delete(tmpdir):
+    # test empty cache
+    memory, _, _ = _setup_toy_cache(tmpdir, num_inputs=0)
+    items_to_delete = memory.store_backend._get_items_to_delete('1K')
+    assert items_to_delete == []
+
     memory, expected_hash_cachedirs, _ = _setup_toy_cache(tmpdir)
     items = memory.store_backend.get_items()
     # bytes_limit set to keep only one cache item (each hash cache
@@ -1407,12 +1412,6 @@ def test_deprecated_bytes_limit(tmpdir):
 class TestCacheValidationCallback:
     "Tests on parameter `cache_validation_callback`"
 
-    @pytest.fixture()
-    def memory(self, tmp_path):
-        mem = Memory(location=tmp_path)
-        yield mem
-        mem.clear()
-
     def foo(self, x, d, delay=None):
         d["run"] = True
         if delay is not None:
@@ -1486,3 +1485,42 @@ class TestCacheValidationCallback:
         assert d1["run"]
         assert not d2["run"]
         assert d3["run"]
+
+
+class TestMemorizedFunc:
+    "Tests for the MemorizedFunc and NotMemorizedFunc classes"
+
+    @staticmethod
+    def f(x, counter):
+        counter[x] = counter.get(x, 0) + 1
+        return counter[x]
+
+    def test_call_method_memorized(self, memory):
+        "Test calling the function"
+
+        f = memory.cache(self.f, ignore=['counter'])
+
+        counter = {}
+        assert f(2, counter) == 1
+        assert f(2, counter) == 1
+
+        x, meta = f.call(2, counter)
+        assert x == 2, "f has not been called properly"
+        assert isinstance(meta, dict), (
+            "Metadata are not returned by MemorizedFunc.call."
+        )
+
+    def test_call_method_not_memorized(self, memory):
+        "Test calling the function"
+
+        f = NotMemorizedFunc(self.f)
+
+        counter = {}
+        assert f(2, counter) == 1
+        assert f(2, counter) == 2
+
+        x, meta = f.call(2, counter)
+        assert x == 3, "f has not been called properly"
+        assert isinstance(meta, dict), (
+            "Metadata are not returned by MemorizedFunc.call."
+        )

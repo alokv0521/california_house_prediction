@@ -1,4 +1,5 @@
 """Collection of utilities for command-line interfaces and console scripts."""
+
 import os
 import re
 
@@ -6,7 +7,9 @@ import re
 numberAddedRE = re.compile(r"#\d+$")
 
 
-def makeOutputFileName(input, outputDir=None, extension=None, overWrite=False, suffix=""):
+def makeOutputFileName(
+    input, outputDir=None, extension=None, overWrite=False, suffix=""
+):
     """Generates a suitable file name for writing output.
 
     Often tools will want to take a file, do some kind of transformation to it,
@@ -44,6 +47,7 @@ def makeOutputFileName(input, outputDir=None, extension=None, overWrite=False, s
     if not overWrite:
         while os.path.exists(output):
             output = os.path.join(
-                dirName, fileName + suffix + "#" + repr(n) + extension)
+                dirName, fileName + suffix + "#" + repr(n) + extension
+            )
             n += 1
     return output

@@ -258,6 +258,7 @@ class Vec2D(tuple):
     def __rmul__(self, other):
         if isinstance(other, int) or isinstance(other, float):
             return Vec2D(self[0]*other, self[1]*other)
+        return NotImplemented
     def __sub__(self, other):
         return Vec2D(self[0]-other[0], self[1]-other[1])
     def __neg__(self):
@@ -833,7 +834,7 @@ class TurtleScreenBase(object):
         Arguments: title is the title of the dialog window,
         prompt is a text mostly describing what numerical information to input.
         default: default value
-        minval: minimum value for imput
+        minval: minimum value for input
         maxval: maximum value for input
 
         The number input must be in the range minval .. maxval if these are
@@ -1352,7 +1353,7 @@ class TurtleScreen(TurtleScreenBase):
         Arguments:
         fun -- a function with two arguments, the coordinates of the
                clicked point on the canvas.
-        num -- the number of the mouse-button, defaults to 1
+        btn -- the number of the mouse-button, defaults to 1
 
         Example (for a TurtleScreen instance named screen)
 
@@ -1568,7 +1569,7 @@ class TNavigator(object):
         fullcircle -  a number
 
         Set angle measurement units, i. e. set number
-        of 'degrees' for a full circle. Dafault value is
+        of 'degrees' for a full circle. Default value is
         360 degrees.
 
         Example (for a Turtle instance named turtle):
@@ -3526,7 +3527,7 @@ class RawTurtle(TPen, TNavigator):
         Arguments:
         fun --  a function with two arguments, to which will be assigned
                 the coordinates of the clicked point on the canvas.
-        num --  number of the mouse-button defaults to 1 (left mouse button).
+        btn --  number of the mouse-button defaults to 1 (left mouse button).
         add --  True or False. If True, new binding will be added, otherwise
                 it will replace a former binding.
 
@@ -3547,7 +3548,7 @@ class RawTurtle(TPen, TNavigator):
         Arguments:
         fun -- a function with two arguments, to which will be assigned
                 the coordinates of the clicked point on the canvas.
-        num --  number of the mouse-button defaults to 1 (left mouse button).
+        btn --  number of the mouse-button defaults to 1 (left mouse button).
 
         Example (for a MyTurtle instance named joe):
         >>> class MyTurtle(Turtle):
@@ -3572,7 +3573,7 @@ class RawTurtle(TPen, TNavigator):
         Arguments:
         fun -- a function with two arguments, to which will be assigned
                the coordinates of the clicked point on the canvas.
-        num -- number of the mouse-button defaults to 1 (left mouse button).
+        btn -- number of the mouse-button defaults to 1 (left mouse button).
 
         Every sequence of mouse-move-events on a turtle is preceded by a
         mouse-click event on that turtle.

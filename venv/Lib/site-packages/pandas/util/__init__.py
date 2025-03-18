@@ -1,30 +1,29 @@
-from pandas.util._decorators import Appender, Substitution, cache_readonly  # noqa
+def __getattr__(key: str):
+    # These imports need to be lazy to avoid circular import errors
+    if key == "hash_array":
+        from pandas.core.util.hashing import hash_array
 
-from pandas import compat
-from pandas.core.util.hashing import hash_array, hash_pandas_object  # noqa
+        return hash_array
+    if key == "hash_pandas_object":
+        from pandas.core.util.hashing import hash_pandas_object
 
-# compatibility for import pandas; pandas.util.testing
+        return hash_pandas_object
+    if key == "Appender":
+        from pandas.util._decorators import Appender
 
-if compat.PY37:
+        return Appender
+    if key == "Substitution":
+        from pandas.util._decorators import Substitution
 
-    def __getattr__(name):
-        if name == "testing":
-            import pandas.util.testing
+        return Substitution
 
-            return pandas.util.testing
-        else:
-            raise AttributeError(f"module 'pandas.util' has no attribute '{name}'")
+    if key == "cache_readonly":
+        from pandas.util._decorators import cache_readonly
 
+        return cache_readonly
 
-else:
-
-    class _testing:
-        def __getattr__(self, item):
-            import pandas.util.testing
-
-            return getattr(pandas.util.testing, item)
-
-    testing = _testing()
+    raise AttributeError(f"module 'pandas.util' has no attribute '{key}'")
 
 
-del compat
+def capitalize_first_letter(s):
+    return s[:1].upper() + s[1:]

@@ -77,15 +77,6 @@ class LocaleTime(object):
         if time.tzname != self.tzname or time.daylight != self.daylight:
             raise ValueError("timezone changed during initialization")
 
-    def __pad(self, seq, front):
-        # Add '' to seq to either the front (is True), else the back.
-        seq = list(seq)
-        if front:
-            seq.insert(0, '')
-        else:
-            seq.append('')
-        return seq
-
     def __calc_weekday(self):
         # Set self.a_weekday and self.f_weekday using the calendar
         # module.
@@ -191,7 +182,7 @@ class TimeRE(dict):
             self.locale_time = LocaleTime()
         base = super()
         base.__init__({
-            # The " \d" part of the regex is to make %c from ANSI C work
+            # The " [1-9]" part of the regex is to make %c from ANSI C work
             'd': r"(?P<d>3[0-1]|[1-2]\d|0[1-9]|[1-9]| [1-9])",
             'f': r"(?P<f>[0-9]{1,6})",
             'H': r"(?P<H>2[0-3]|[0-1]\d|\d)",

@@ -5,8 +5,8 @@ a gridspec.
 
 Each box is defined by left[ncols], right[ncols], bottom[nrows] and top[nrows],
 and by two editable margins for each side.  The main margin gets its value
-set by the size of ticklabels, titles, etc on each axes that is in the figure.
-The outer margin is the padding around the axes, and space for any
+set by the size of ticklabels, titles, etc on each Axes that is in the figure.
+The outer margin is the padding around the Axes, and space for any
 colorbars.
 
 The "inner" widths and heights of these boxes are then constrained to be the
@@ -20,6 +20,9 @@ import itertools
 import kiwisolver as kiwi
 import logging
 import numpy as np
+
+import matplotlib as mpl
+import matplotlib.patches as mpatches
 from matplotlib.transforms import Bbox
 
 _log = logging.getLogger(__name__)
@@ -35,11 +38,10 @@ class LayoutGrid:
                  h_pad=None, w_pad=None, width_ratios=None,
                  height_ratios=None):
         Variable = kiwi.Variable
-        self.parent = parent
         self.parent_pos = parent_pos
         self.parent_inner = parent_inner
         self.name = name + seq_id()
-        if parent is not None:
+        if isinstance(parent, LayoutGrid):
             self.name = f'{parent.name}.{self.name}'
         self.nrows = nrows
         self.ncols = ncols
@@ -51,13 +53,13 @@ class LayoutGrid:
             self.width_ratios = np.ones(ncols)
 
         sn = self.name + '_'
-        if parent is None:
-            self.parent = None
+        if not isinstance(parent, LayoutGrid):
+            # parent can be a rect if not a LayoutGrid
+            # allows specifying a rectangle to contain the layout.
             self.solver = kiwi.Solver()
         else:
-            self.parent = parent
             parent.add_child(self, *parent_pos)
-            self.solver = self.parent.solver
+            self.solver = parent.solver
         # keep track of artist associated w/ this layout.  Can be none
         self.artists = np.empty((nrows, ncols), dtype=object)
         self.children = np.empty((nrows, ncols), dtype=object)
@@ -72,14 +74,8 @@ class LayoutGrid:
 
         sol = self.solver
 
-        # These are redundant, but make life easier if
-        # we define them all.  All that is really
-        # needed is left/right, margin['left'], and margin['right']
-        self.widths = [Variable(f'{sn}widths[{i}]') for i in range(ncols)]
         self.lefts = [Variable(f'{sn}lefts[{i}]') for i in range(ncols)]
         self.rights = [Variable(f'{sn}rights[{i}]') for i in range(ncols)]
-        self.inner_widths = [Variable(f'{sn}inner_widths[{i}]')
-                             for i in range(ncols)]
         for todo in ['left', 'right', 'leftcb', 'rightcb']:
             self.margins[todo] = [Variable(f'{sn}margins[{todo}][{i}]')
                                   for i in range(ncols)]
@@ -90,9 +86,6 @@ class LayoutGrid:
             self.margins[todo] = np.empty((nrows), dtype=object)
             self.margin_vals[todo] = np.zeros(nrows)
 
-        self.heights = [Variable(f'{sn}heights[{i}]') for i in range(nrows)]
-        self.inner_heights = [Variable(f'{sn}inner_heights[{i}]')
-                              for i in range(nrows)]
         self.bottoms = [Variable(f'{sn}bottoms[{i}]') for i in range(nrows)]
         self.tops = [Variable(f'{sn}tops[{i}]') for i in range(nrows)]
         for todo in ['bottom', 'top', 'bottomcb', 'topcb']:
@@ -104,7 +97,7 @@ class LayoutGrid:
         # set these margins to zero by default. They will be edited as
         # children are filled.
         self.reset_margins()
-        self.add_constraints()
+        self.add_constraints(parent)
 
         self.h_pad = h_pad
         self.w_pad = w_pad
@@ -114,14 +107,14 @@ class LayoutGrid:
         for i in range(self.nrows):
             for j in range(self.ncols):
                 str += f'{i}, {j}: '\
-                       f'L({self.lefts[j].value():1.3f}, ' \
+                       f'L{self.lefts[j].value():1.3f}, ' \
                        f'B{self.bottoms[i].value():1.3f}, ' \
-                       f'W{self.widths[j].value():1.3f}, ' \
-                       f'H{self.heights[i].value():1.3f}, ' \
-                       f'innerW{self.inner_widths[j].value():1.3f}, ' \
-                       f'innerH{self.inner_heights[i].value():1.3f}, ' \
+                       f'R{self.rights[j].value():1.3f}, ' \
+                       f'T{self.tops[i].value():1.3f}, ' \
                        f'ML{self.margins["left"][j].value():1.3f}, ' \
-                       f'MR{self.margins["right"][j].value():1.3f}, \n'
+                       f'MR{self.margins["right"][j].value():1.3f}, ' \
+                       f'MB{self.margins["bottom"][i].value():1.3f}, ' \
+                       f'MT{self.margins["top"][i].value():1.3f}, \n'
         return str
 
     def reset_margins(self):
@@ -134,11 +127,11 @@ class LayoutGrid:
                      'leftcb', 'rightcb', 'bottomcb', 'topcb']:
             self.edit_margins(todo, 0.0)
 
-    def add_constraints(self):
+    def add_constraints(self, parent):
         # define self-consistent constraints
         self.hard_constraints()
         # define relationship with parent layoutgrid:
-        self.parent_constraints()
+        self.parent_constraints(parent)
         # define relative widths of the grid cells to each other
         # and stack horizontally and vertically.
         self.grid_constraints()
@@ -172,18 +165,18 @@ class LayoutGrid:
         # np.ix_ returns the cross product of i and j indices
         self.children[np.ix_(np.atleast_1d(i), np.atleast_1d(j))] = child
 
-    def parent_constraints(self):
+    def parent_constraints(self, parent):
         # constraints that are due to the parent...
         # i.e. the first column's left is equal to the
         # parent's left, the last column right equal to the
         # parent's right...
-        parent = self.parent
-        if parent is None:
-            hc = [self.lefts[0] == 0,
-                  self.rights[-1] == 1,
+        if not isinstance(parent, LayoutGrid):
+            # specify a rectangle in figure coordinates
+            hc = [self.lefts[0] == parent[0],
+                  self.rights[-1] == parent[0] + parent[2],
                   # top and bottom reversed order...
-                  self.tops[0] == 1,
-                  self.bottoms[-1] == 0]
+                  self.tops[0] == parent[1] + parent[3],
+                  self.bottoms[-1] == parent[1]]
         else:
             rows, cols = self.parent_pos
             rows = np.atleast_1d(rows)
@@ -504,21 +497,12 @@ def seq_id():
     return '%06d' % next(_layoutboxobjnum)
 
 
-def print_children(lb):
-    """Print the children of the layoutbox."""
-    for child in lb.children:
-        print_children(child)
-
-
-def plot_children(fig, lg=None, level=0, printit=False):
+def plot_children(fig, lg=None, level=0):
     """Simple plotting to show where boxes are."""
-    import matplotlib.pyplot as plt
-    import matplotlib.patches as mpatches
-
     if lg is None:
-        _layoutgrids = fig.execute_constrained_layout()
+        _layoutgrids = fig.get_layout_engine().execute(fig)
         lg = _layoutgrids[fig]
-    colors = plt.rcParams["axes.prop_cycle"].by_key()["color"]
+    colors = mpl.rcParams["axes.prop_cycle"].by_key()["color"]
     col = colors[level]
     for i in range(lg.nrows):
         for j in range(lg.ncols):
