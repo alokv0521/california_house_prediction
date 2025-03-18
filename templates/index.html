@@ -1,3 +1,78 @@
-<h1>
-    hey dude
-</h1>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>House Price Predictor</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background: url('https://source.unsplash.com/1600x900/?house,real-estate') no-repeat center center/cover;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+        }
+        .container {
+            background: rgba(255, 255, 255, 0.9);
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0px 4px 8px rgba(0, 0, 0, 0.2);
+            width: 300px;
+            text-align: center;
+        }
+        input {
+            width: 90%;
+            padding: 8px;
+            margin: 5px 0;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+        }
+        button {
+            width: 100%;
+            padding: 10px;
+            background: #28a745;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            margin-top: 10px;
+        }
+        button:hover {
+            background: #218838;
+        }
+        #prediction {
+            margin-top: 15px;
+            font-size: 18px;
+            font-weight: bold;
+            color: #333;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="container">
+        <h2>House Price Predictor</h2>
+        <form id="predictionForm" action="{{ url_for('predict')}}"method="post">
+            <input type="text" name = "MedInc" placeholder="MedInc" required>
+            <input type="text" name = "HouseAge"  placeholder="HouseAge" required>
+            <input type="text" name = "AveRooms" placeholder="AveRooms" required>
+            <input type="text" name = "AveBedrms" placeholder="AveBedrms" required>
+            <input type="text" name="Population" placeholder="Population" required>
+            <input type="text" name = "AveOccup" placeholder="AveOccup" required>
+            <input type="text" name = "Latitude" placeholder="Latitude" required>
+            <input type="text" name="Longitude" placeholder="Longitude" required>
+            <button type="submit" class="btn btn-primary btn-block btn-large">Predict Price</button>
+        </form>
+        <!-- <div id="prediction">Predicted Price: -- </div> -->
+        
+    </div>
+    <br>
+    <br>
+
+    {{prediction_text}}
+
+
+</body>
+</html>
